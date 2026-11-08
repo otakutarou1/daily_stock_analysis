@@ -415,7 +415,7 @@ class StockAnalysisPipeline:
 
             # 从数据源获取数据
             logger.info(f"{stock_name}({code}) 开始从数据源获取数据...")
-            df, source_name = self.fetcher_manager.get_daily_data(code, days=30)
+            df, source_name = self.fetcher_manager.get_daily_data(code, days=180)
 
             if df is None or df.empty:
                 return False, "获取数据为空"
@@ -643,7 +643,7 @@ class StockAnalysisPipeline:
                 _mkt = get_market_for_stock(normalize_stock_code(code))
                 frozen = get_frozen_target_date()
                 end_date = frozen if frozen else get_market_now(_mkt).date()
-                start_date = end_date - timedelta(days=89)  # ~60 trading days for MA60
+                start_date = end_date - timedelta(days=359)  # ~60 trading days for MA60
                 historical_bars = self.db.get_data_range(code, start_date, end_date)
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
