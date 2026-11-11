@@ -1,9 +1,10 @@
 name: 每日股票分析
 
 on:
-  # 定时触发：北京时间周二至周六 08:17（UTC 周二至周六 00:17），覆盖美股周一至周五收盘
+  # 定时触发：北京时间周二至周六 08:17（主要）和 08:47（备用）；避免单次调度遗漏
   schedule:
     - cron: '17 0 * * 2-6'     # 周二至周六 UTC 00:17 = 北京时间 08:17
+    - cron: '47 0 * * 2-6'     # 周二至周六 UTC 00:47 = 北京时间 08:47，使用下方去重检查
   
   # 手动触发
   workflow_dispatch:
@@ -29,7 +30,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check_daily_run:
+    name: 检查当天是否已有成功分析
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      should_run: ${{ steps.dedupe.outputs.should_run }}
+    steps:
+      - name: 检查重复运行
+        id: dedupe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # 手动触发始终允许执行，避免妨碍人工补发和测试
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "手动触发：正常执行分析"
+            exit 0
+          fi
+          today="$(TZ=Asia/Shanghai date +%F)"
+          # GitHub schedule 使用 UTC，00:17/00:47 与北京时间属于同一日
+          # 通过 Actions API 查询本工作流最近成功的运行，防止备用触发重复发信
+          if recent="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/00-daily-analysis.yml/runs?per_page=60" --jq '.workflow_runs[] | select(.conclusion == "success") | [.id, .created_at] | @tsv')"; then
+            if printf '%s\n' "$recent" | awk -v day="$today" -v current="$GITHUB_RUN_ID" '$1 != current && substr($2, 1, 10) == day { found=1 } END { exit !found }'; then
+              echo "北京时间 $today 已有一次成功分析，跳过本次备用调度，避免重复邮件"
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo "::warning::无法检查当天已有运行；为了避免漏报，本次仍执行（可能重复发信）"
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "当天尚无成功分析，继续执行"
+
   analyze:
+    needs: check_daily_run
+    if: needs.check_daily_run.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     # 兼容误将 STOCK_LIST 配到同名 Environment variables 的场景；
     # 推荐位置仍是 Settings -> Secrets and variables -> Actions -> Repository variables。
